@@ -13,6 +13,7 @@ Install library in your cmake build.
 ```bash
 git clone https://github.com/abiiranathan/http_request
 
+cd http_request
 mkdir build && cd build
 cmake --build ../
 make
