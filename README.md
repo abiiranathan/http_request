@@ -15,7 +15,7 @@ git clone https://github.com/abiiranathan/http_request
 
 cd http_request
 mkdir build && cd build
-cmake --build ../
+cmake --configure ../
 make
 sudo make install
 ```
