@@ -4,17 +4,15 @@ Simple http requests in Qt6 in C++.
 
 HttpRequest in a simple static library and wrapper around **QNetworkAccessManager** that provides a simple interface for API requests in Qt.
 
-This reduces the amount of code you would have to write to do each request in a big Qt application.
-
 ## Installation
 
 Install library in your cmake build.
 
 ```bash
-git clone https://github.com/abiiranathan/http_request
+git clone https://github.com/abiiranathan/http_request.git
 
 cd http_request
-mkdir build && cd build
+mkdir -p build && cd build
 cmake --configure ../
 make
 sudo make install
@@ -48,14 +46,15 @@ int main(int argc, char **argv) {
 
     window->setCentralWidget(widget);
 
-    // Set your API Base url
+    // Initialize global static member variables for the library.
     HttpRequest::BASE_NAME = "https://localhost:8089/api/v1";
 
     // Set root certificate for your self-signed certs
     HttpRequest::SetRootCA("../certs/rootca.crt");
 
     // Set JWT AuthToken for Token authentication
-    HttpRequest::AuthToken = "your JWT Token";
+    HttpRequest::AuthToken = ""; // Update this after login
+
 
     // Custom header map
     QMap<QString, QString> headers;
@@ -64,92 +63,94 @@ int main(int argc, char **argv) {
     headers.insert("Accept", "application/json");
 
     // Initialize a new request to fetch users
-    HttpRequest request("/users", headers);
+    HttpRequest *request = new HttpRequest("/users", headers)
 
-    // GET Request takes in callback functions
-    // to receive the result and an error.
-    request.get(
-        [](QJsonDocument doc) {
-            qDebug() << doc;
-
-            // Work with your JSON document
-        },
-        [](QString error) {
-            qDebug() << error;
-        });
-
-    window->show();
     return app.exec();
 }
 ```
 
-POST Request
+### SIGNALS
+
+Data is returned through use of signals.
+A number of signals are defined by HttpRequest.
+
+- jsonReady: This is used when you expect JSON data.
+- htmlReady: This is used when fetching raw html.
+- imageReady: Used to fetch image resources
+- fileReady: Used when downloading files.
+- onProgress: Sends download progress when getFile is called. Used together with fileReady signal.
+- deleteComplete: Used after delete request.
+- onError: Used to report the error from the request as a string.
+
+Example usage:
 
 ```c++
+HttpRequest request("/users", headers);
+HttpRequest *request = new HttpRequest("/users")
+connect(request, &HttpRequest::jsonReady, this, [this](QJsonDocument doc){
+  this->showUsers(doc);
+})
 
-void handle_login(QJsonObject doc){
-  QJsonObject obj = doc.object();
+request.getJson();
 
-  qDebug() << "Token: " << obj["token"].toString();
-  qDebug() << "User: " << obj["user"].toObject();
+---
 
-}
+HttpRequest *request = new HttpRequest("/static/media/book.pdf")
+connect(request, &HttpRequest::onProgress, this, [this](qint64 bytesRec, qint64 totalBytes){
+  this->updateProgresBar(bytesRec, totalBytes);
+})
 
-void handle_error(QString error){
-  qDebug() << error;
-}
+connect(request, &HttpRequest::fileReady, this, [this](QString dest){
+  qDebug() << "File save in: " << dest;
+})
 
-QString username = ui->username.text();
-QString password = ui->password.text();
+request.getFile("/home/username/Downloads/book.pdf");
+
+---
+
+#Login
+HttpRequest *request = new HttpRequest("/auth/login")
+QString username = ui->lineEdit->text();
+QString password = ui->lineEdit_2->text();
 
 QJsonObject obj;
-obj["username"] = username;
-obj["password"] = password;
+obj.insert("username", username);
+obj.insert("password", password);
+
 QJsonDocument doc(obj);
 QByteArray data = doc.toJson();
 
-HttpRequest request("/auth/login")
-request.post(data, handle_login, handle_error);
+HttpRequest *request = new HttpRequest("/auth/login");
+connect(request, &HttpRequest::jsonReady, this, [this](QJsonDocument doc){
+    this->onLoginSuccess(doc);
+});
 
-```
+connect(request, &HttpRequest::onError, this, [this](QString error){
+    this->onLoginError(error);
+});
+request->post(data);
 
-Download/Fetch a file
+--
 
-```c++
-void onSuccess(){
-  qDebug() << "Download complete.";
-}
+#Fetch plain html
 
-void onError(QString error){
-  qDebug() << error;
-}
+HttpRequest *request = new HttpRequest("/index.html");
+connect(request, &HttpRequest::htmlReady, this, [this](QByteArray html){
+    qDebug <<  html;
+});
 
-void onProgress(qint64 size, qint64 maxSize){
-  count << "Downloaded " << size << " out of " << maxSize ;
-}
-
-HttpRequest request("/static/media/video.mp4");
-QString destination = QString("/home/myname/Downloads/video.mp4")
-request.getFile(
-  destination,
-  onSuccess,
-  onError,
-  onProgress);
-```
-
-Fetch an image
-
-```c++
-void onSuccess(QImage img){
-  qDebug() << "Download complete.";
-  ui->myLabel->setPixmap(QPixmap::fromImage(img));
-}
+connect(request, &HttpRequest::onError, this, [this](QString error){
+    qDebug() << "error fetching page: " << error;
+});
+request->getHtml(data);
 
 
-void onError(QString error){
-  qDebug() << error;
-}
+---
+# Delete a resource
+connect(request, &HttpRequest::deleteComplete, this, [this](QString msg){
+    qDebug <<  msg;
+});
 
-HttpRequest request("/static/images/logo.png")
-request.getImage(onSuccess onError);
+request.deleteResource();
+The success slot receives a QString.
 ```

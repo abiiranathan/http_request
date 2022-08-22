@@ -49,9 +49,7 @@ void HttpRequest::initRequest(QString url) {
     }
 }
 
-HttpRequest::HttpRequest(QString url) {
-    initRequest(url);
-};
+HttpRequest::HttpRequest(QString url) { initRequest(url); };
 
 HttpRequest::HttpRequest(QString url, QMap<QString, QString> headers) {
     // Call default constructor
@@ -65,45 +63,48 @@ HttpRequest::HttpRequest(QString url, QMap<QString, QString> headers) {
     }
 };
 
-HttpRequest::~HttpRequest() = default;
+HttpRequest::~HttpRequest() {
+    delete &request;
+    delete manager;
+};
 
-void HttpRequest::processJSONResponse(QNetworkReply *reply, void (*onSuccess)(QJsonDocument), void (*onError)(QString)) {
+void HttpRequest::processJSONResponse(QNetworkReply *reply) {
     if (reply->error() == QNetworkReply::NoError) {
         reply->deleteLater();
         QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-        onSuccess(doc);
+        emit this->jsonReady(doc);
     } else {
-        sendError(reply, onError);
+        sendError(reply);
     }
 }
 
-void HttpRequest::processHtmlResponse(QNetworkReply *reply, void (*onSuccess)(QByteArray), void (*onError)(QString)) {
+void HttpRequest::processHtmlResponse(QNetworkReply *reply) {
     if (reply->error() == QNetworkReply::NoError) {
         reply->deleteLater();
         QByteArray data = reply->readAll();
-        onSuccess(data);
+        emit this->htmlReady(data);
     } else {
-        sendError(reply, onError);
+        sendError(reply);
     }
 }
 
-void HttpRequest::processStringResponse(QNetworkReply *reply, void (*onSuccess)(QString), void (*onError)(QString)) {
+void HttpRequest::processStringResponse(QNetworkReply *reply) {
     if (reply->error() == QNetworkReply::NoError) {
         reply->deleteLater();
         QString text = reply->readAll();
-        onSuccess(text);
+        emit this->deleteComplete(text);
     } else {
-        sendError(reply, onError);
+        sendError(reply);
     }
 }
 
-void HttpRequest::sendError(QNetworkReply *reply, void (*onError)(QString)) {
+void HttpRequest::sendError(QNetworkReply *reply) {
     QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
     QString defaultError = reply->errorString();
     reply->deleteLater();
 
     if (!doc.isObject()) {
-        onError(defaultError);
+        emit this->onError(defaultError);
         return;
     }
 
@@ -119,117 +120,100 @@ void HttpRequest::sendError(QNetworkReply *reply, void (*onError)(QString)) {
                 .append(o.value("msg").toString())
                 .append("\n");
         }
-        onError(errorString);
+        emit this->onError(errorString);
         return;
     }
 
     if (obj.contains("error")) {
-        onError(obj.value("error").toString());
+        emit this->onError(obj.value("error").toString());
         return;
     }
 
-    onError(defaultError);
+    emit this->onError(defaultError);
 }
 
-void HttpRequest::getImage(void (*onSuccess)(QImage), void (*onError)(QString)) {
-    connect(manager, &QNetworkAccessManager::finished, this,
-            [onSuccess, onError](QNetworkReply *reply) {
-                QImageReader imageReader(reply);
-                QImage img = imageReader.read();
-                reply->deleteLater();
+void HttpRequest::getImage() {
+    connect(manager, &QNetworkAccessManager::finished, this, [this](QNetworkReply *reply) {
+        QImageReader imageReader(reply);
+        QImage img = imageReader.read();
+        reply->deleteLater();
 
-                if (img.isNull()) {
-                    onError(imageReader.errorString());
-                    return;
-                }
-                return onSuccess(img);
-            });
+        if (img.isNull()) {
+            emit this->onError(imageReader.errorString());
+            return;
+        }
+
+        emit this->imageReady(img);
+    });
 
     manager->get(request);
 }
 
-void HttpRequest::getFile(QString path, void (*onSuccess)(), void (*onError)(QString), void (*onDownloadProgess)(qint64, qint64)) {
-    connect(manager, &QNetworkAccessManager::finished, this,
-            [path, onSuccess, onError](QNetworkReply *reply) {
-                if (reply->error() == QNetworkReply::NoError) {
-                    QFile *file;
-                    file = new QFile(path);
+void HttpRequest::getFile(QString path) {
+    connect(manager, &QNetworkAccessManager::finished, this, [path, this](QNetworkReply *reply) {
+        if (reply->error() == QNetworkReply::NoError) {
+            QFile *file;
+            file = new QFile(path);
 
-                    if (file->open(QIODevice::WriteOnly)) {
-                        file->write(reply->readAll());
-                        reply->deleteLater();
-                        file->close();
-                        delete file;
-                        onSuccess();
-                    } else {
-                        QString err = file->errorString();
-                        delete file;
-                        reply->deleteLater();
-                        onError("Unable to save the file: " + file->errorString());
-                    }
-                } else {
-                    QString errorString = reply->errorString();
-                    reply->deleteLater();
-                    onError("Error downloading file: " + errorString);
-                }
-            });
+            if (file->open(QIODevice::WriteOnly)) {
+                file->write(reply->readAll());
+                reply->deleteLater();
+                file->close();
+                delete file;
+
+                emit this->fileReady(path);
+            } else {
+                QString err = file->errorString();
+                delete file;
+                reply->deleteLater();
+                emit this->onError("Unable to save the file: " + file->errorString());
+            }
+        } else {
+            QString errorString = reply->errorString();
+            reply->deleteLater();
+            emit this->onError("Error downloading file: " + errorString);
+        }
+    });
 
     QNetworkReply *reply = manager->get(request);
-    if (onDownloadProgess != nullptr) {
-        connect(reply, &QNetworkReply::downloadProgress, this, onDownloadProgess);
-    }
+    connect(reply, &QNetworkReply::downloadProgress, this,
+            [=](qint64 bytesReceived, qint64 bytesTotal) {
+                emit this->onProgress(bytesReceived, bytesTotal);
+            });
 }
 
-void HttpRequest::get(void (*onSuccess)(QJsonDocument), void (*onError)(QString)) {
+void HttpRequest::getJSON() {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processJSONResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processJSONResponse(reply); });
     manager->get(request);
 };
 
-void HttpRequest::get(void (*onSuccess)(QByteArray), void (*onError)(QString)) {
+void HttpRequest::getHtml() {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processHtmlResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processHtmlResponse(reply); });
     manager->get(request);
 };
 
-void HttpRequest::post(QByteArray data, void (*onSuccess)(QJsonDocument), void (*onError)(QString)) {
+void HttpRequest::post(QByteArray data) {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processJSONResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processJSONResponse(reply); });
     manager->post(request, data);
 };
 
-void HttpRequest::put(QByteArray data, void (*onSuccess)(QJsonDocument), void (*onError)(QString)) {
+void HttpRequest::put(QByteArray data) {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processJSONResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processJSONResponse(reply); });
     manager->put(request, data);
 };
 
-void HttpRequest::patch(QByteArray data, void (*onSuccess)(QJsonDocument), void (*onError)(QString)) {
+void HttpRequest::patch(QByteArray data) {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processJSONResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processJSONResponse(reply); });
     manager->sendCustomRequest(request, "PATCH", data);
 };
 
-void HttpRequest::deleteResource(void (*onSuccess)(QString), void (*onError)(QString)) {
+void HttpRequest::deleteResource() {
     connect(manager, &QNetworkAccessManager::finished, this,
-            [this, onSuccess, onError](QNetworkReply *reply) {
-                this->processStringResponse(reply, onSuccess, onError);
-            });
-
+            [this](QNetworkReply *reply) { this->processStringResponse(reply); });
     manager->deleteResource(request);
 };
